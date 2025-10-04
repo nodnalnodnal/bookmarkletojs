@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Bookmarklet Converter</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/normalize/8.0.1/normalize.min.css">
+<style>
+  :root{--bg:#0b0f14;--panel:#0f1720;--text:#e6eef6;--muted:#9fb3c8;--accent:#8834af;--btn:#1f2937}
+  body{font-family:Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:var(--bg); color:var(--text); margin:0; padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+  h1{font-size:18px;margin:0;}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  textarea{width:100%;height:220px;background:var(--panel);border:1px solid rgba(255,255,255,0.03);color:var(--text);padding:12px;border-radius:8px;resize:vertical;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;font-size:13px}
+  pre{white-space:pre-wrap;background:#071018;padding:12px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);min-height:160px;overflow:auto;font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;font-size:13px;color:var(--text)}
+  button{background:var(--btn);color:var(--text);border:0;padding:8px 10px;border-radius:8px;cursor:pointer}
+  .btn-accent{background:linear-gradient(90deg,var(--accent),#5b20a8);box-shadow:0 4px 12px rgba(136,52,175,0.18)}
+  .row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  label{color:var(--muted);font-size:13px}
+  .small{font-size:12px;color:var(--muted)}
+  .panel{background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent);padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);}
+  .right{margin-left:auto;display:flex;gap:8px;}
+  input[type=file]{display:none;}
+  .filelabel{background:transparent;border:1px dashed rgba(255,255,255,0.06);padding:8px;border-radius:8px;cursor:pointer;color:var(--muted)}
+  .toggle{display:inline-flex;align-items:center;gap:8px}
+  a.link{color:var(--accent);text-decoration:none;font-weight:600}
+  footer{margin-top:14px;color:var(--muted);font-size:13px}
+  @media (max-width:720px){textarea{height:180px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Bookmarklet ⇄ JavaScript Converter</h1>
+    <div class="right">
+      <button id="darkToggle">Toggle Theme</button>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="row">
+      <label for="inp">Paste bookmarklet or JS here:</label>
+      <div class="right small">Auto-detects <code>javascript:</code>, URL-encoded data, or raw JS</div>
+    </div>
+    <textarea id="inp" placeholder="javascript:(function(){...})() or (function(){...})() or %7B...%7D"></textarea>
+    <div class="controls">
+      <button id="decodeBtn" class="btn-accent">Decode → JS</button>
+      <button id="encodeBtn">Encode → Bookmarklet</button>
+      <button id="beautifyBtn">Pretty-print</button>
+      <button id="copyOut">Copy Output</button>
+      <button id="saveJS">Save as .js</button>
+      <label class="filelabel" id="fileLabel">Drop .js/.txt file or <input type="file" id="fileInput" /></label>
+    </div>
+    <div>
+      <label class="small">Output:</label>
+      <pre id="out" aria-live="polite"></pre>
+    </div>
+    <div style="margin-top:10px" class="row">
+      <label class="small">Quick actions:</label>
+      <div class="right">
+        <button id="copyBM">Copy Bookmarklet</button>
+        <button id="openPopup">Open in Popup (uses embed / proxy heuristics)</button>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div>Instructions: Paste any bookmarklet (even URL-encoded). Click <strong>Decode → JS</strong> to get readable code. Use <strong>Encode → Bookmarklet</strong> to turn JS back into a compact `javascript:` link. Use the Save button to download the JS. To host, upload this single HTML file to GitHub Pages or Glitch.</div>
+  </footer>
+</div>
+
+<!-- js-beautify from CDN for pretty printing -->
+<script src="https://cdn.jsdelivr.net/npm/js-beautify@1.14.7/js/lib/beautify.js"></script>
+<script>
+// Utilities
+function startsWithJavascript(s){ return typeof s==='string' && s.trim().toLowerCase().startsWith('javascript:'); }
+function tryDecodeURIComponent(s){
+  try{return decodeURIComponent(s);}catch(e){return null;}
+}
+function decodeBookmarklet(s){
+  if(!s) return '';
+  s = s.trim();
+  if(startsWithJavascript(s)) s = s.replace(/^\s*javascript:/i,'');
+  // If it looks URL-encoded heavily, try decodeURIComponent repeatedly
+  let decoded = tryDecodeURIComponent(s) || s;
+  // If still contains %7B or %22, try one more time
+  if(/%7[bB]|%22|%3C|%3E/.test(decoded)) {
+    let t = tryDecodeURIComponent(decoded);
+    if(t) decoded = t;
+  }
+  // If it's wrapped like (function(){...})() or starts with %28, return decoded
+  return decoded;
+}
+
+function encodeToBookmarklet(s){
+  s = s || '';
+  // Remove surrounding script tags if present
+  s = s.replace(/^\s*<script[^>]*>/i,'').replace(/<\/script>\s*$/i,'');
+  // Trim and minify whitespace a bit
+  s = s.trim().replace(/\s+/g,' ');
+  return 'javascript:' + encodeURIComponent(s);
+}
+
+function beautifyJS(s){
+  if(typeof js_beautify === 'function'){
+    try{return js_beautify(s, { indent_size: 2, space_in_empty_paren: true }); }catch(e){ return s; }
+  }
+  return s;
+}
+
+// UI wiring
+const inp = document.getElementById('inp');
+const out = document.getElementById('out');
+const decodeBtn = document.getElementById('decodeBtn');
+const encodeBtn = document.getElementById('encodeBtn');
+const beautifyBtn = document.getElementById('beautifyBtn');
+const copyOut = document.getElementById('copyOut');
+const copyBM = document.getElementById('copyBM');
+const saveJS = document.getElementById('saveJS');
+const fileInput = document.getElementById('fileInput');
+const fileLabel = document.getElementById('fileLabel');
+const openPopup = document.getElementById('openPopup');
+const darkToggle = document.getElementById('darkToggle');
+
+decodeBtn.onclick = function(){
+  const s = inp.value;
+  const dec = decodeBookmarklet(s);
+  out.textContent = dec || '// (empty output)';
+  // Auto-prettify if looks like JS
+  if(/(^\(|^function|\bvar\b|\blet\b|\bconst\b|\=>)/.test(dec)) {
+    try{ out.textContent = beautifyJS(dec); }catch(e){};
+  }
+};
+
+encodeBtn.onclick = function(){
+  const s = inp.value;
+  // If it starts with javascript:, decode first to get raw JS
+  const raw = decodeBookmarklet(s);
+  const bm = encodeToBookmarklet(raw);
+  out.textContent = bm;
+};
+
+beautifyBtn.onclick = function(){
+  out.textContent = beautifyJS(out.textContent || inp.value || '');
+};
+
+copyOut.onclick = async function(){
+  try{
+    await navigator.clipboard.writeText(out.textContent);
+    copyOut.textContent = 'Copied ✓';
+    setTimeout(()=>copyOut.textContent='Copy Output',1200);
+  }catch(e){
+    alert('Copy failed. Select the output and press Ctrl+C.');
+  }
+};
+
+copyBM.onclick = async function(){
+  try{
+    const bm = out.textContent && out.textContent.trim().startsWith('javascript:') ? out.textContent : encodeToBookmarklet(out.textContent || inp.value);
+    await navigator.clipboard.writeText(bm);
+    copyBM.textContent='Copied ✓';
+    setTimeout(()=>copyBM.textContent='Copy Bookmarklet',1200);
+  }catch(e){
+    alert('Copy failed. Select output and press Ctrl+C.');
+  }
+};
+
+saveJS.onclick = function(){
+  const txt = out.textContent || inp.value || '';
+  const blob = new Blob([txt], {type:'text/javascript;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'script.js'; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+};
+
+fileInput.onchange = function(e){
+  const f = e.target.files[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = function(){ inp.value = reader.result; decodeBtn.click(); };
+  reader.readAsText(f);
+};
+
+// Drag & drop support
+fileLabel.addEventListener('dragover', function(e){ e.preventDefault(); fileLabel.style.borderColor='rgba(255,255,255,0.2)'; });
+fileLabel.addEventListener('dragleave', function(){ fileLabel.style.borderColor='rgba(255,255,255,0.06)'; });
+fileLabel.addEventListener('drop', function(e){
+  e.preventDefault();
+  fileLabel.style.borderColor='rgba(255,255,255,0.06)';
+  const f = e.dataTransfer.files[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = function(){ inp.value = reader.result; decodeBtn.click(); };
+  reader.readAsText(f);
+});
+
+openPopup.onclick = function(){
+  const url = inp.value.trim();
+  if(!url){ alert('Paste a URL or bookmarklet first'); return; }
+  // Try to detect if it's a youtube URL and switch to embed mode
+  let target = url;
+  try{
+    let u = url;
+    if(startsWithJavascript(u)) u = decodeBookmarklet(u);
+    // find first http(s) URL inside string
+    const m = u.match(/https?:\/\/[^\s'")]+/i);
+    if(m) target = m[0];
+  }catch(e){}
+  // Heuristics: YouTube -> embed, if blocked -> use corsproxy.io as fallback
+  if(/youtube\.com|youtu\.be/.test(target)){
+    const idMatch = target.match(/(?:v=|\/embed\/|youtu\.be\/)([A-Za-z0-9_-]{6,})/);
+    if(idMatch) target = 'https://www.youtube.com/embed/' + idMatch[1];
+  }
+  // Open as popup window
+  const w = window.open('', '_blank', 'width=1100,height=700');
+  if(!w){ alert('Popup blocked. Allow popups for this page.'); return; }
+  // Attempt to load directly; if X-Frame-Options blocks, user will see message
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Popup</title></head><body style="margin:0;background:#000"><iframe src="${target}" style="width:100%;height:100vh;border:0"></iframe></body></html>`;
+  w.document.open(); w.document.write(html); w.document.close();
+};
+
+// Theme toggle: simple invert for users who want light mode
+let dark = true;
+darkToggle.onclick = function(){
+  dark = !dark;
+  if(!dark){
+    document.documentElement.style.setProperty('--bg','#f6f8fb');
+    document.documentElement.style.setProperty('--panel','#ffffff');
+    document.documentElement.style.setProperty('--text','#0f1720');
+    document.documentElement.style.setProperty('--muted','#475569');
+    document.documentElement.style.setProperty('--btn','#e6eef6');
+  } else {
+    document.documentElement.style.setProperty('--bg','#0b0f14');
+    document.documentElement.style.setProperty('--panel','#0f1720');
+    document.documentElement.style.setProperty('--text','#e6eef6');
+    document.documentElement.style.setProperty('--muted','#9fb3c8');
+    document.documentElement.style.setProperty('--btn','#1f2937');
+  }
+};
+
+// Auto-detect & decode on paste (optional)
+inp.addEventListener('paste', function(e){
+  setTimeout(()=>{ decodeBtn.click(); }, 20);
+});
+
+// On load: sample
+document.addEventListener('DOMContentLoaded', function(){ out.textContent='// Paste a bookmarklet or JS and click Decode → JS'; });
+
+</script>
+</body>
+</html>
